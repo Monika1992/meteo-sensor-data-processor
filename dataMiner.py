@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 from ftplib import *
 import ftplib
 from time import gmtime, strftime
@@ -6,6 +9,69 @@ import os
 import csv
 import re
 from config import Configuration
+
+
+class Init(object):
+
+    def __init__(self, start_date, end_date):
+        self.start_date = start_date
+        self.end_date = end_date
+
+        self.process()
+
+    def process(self):
+        config = Configuration()
+        ftp = FTP_client()
+        data_manager = Data_manager()
+        logger = Logger()
+        csv_manager = CSV_Manger()
+
+        logger.clear_log_file(config.LOG_FILE_PATH)
+        connection = ftp.connect_to_ftp(config.FTP_HOST, config.FTP_LOGIN, config.FTP_PSWD)
+        start_date_object = data_manager.convert_string_date_to_date_object(self.start_date)
+        end_date_object = data_manager.convert_string_date_to_date_object(self.end_date)
+        dates = data_manager.get_dates_set(start_date_object, end_date_object)
+        file_names = data_manager.get_file_names_from_dates(dates, config.FTP_FILE_EXTENSION)
+        data_manager.create_dir_with_date_stamp(config.RUN_DATE, config.LOCAL_DIR)
+        download_dir = os.path.join(config.LOCAL_DIR, config.RUN_DATE)
+
+        # TODO: Split to methods!
+        for file in file_names:
+            csv_file_path = os.path.join(download_dir, file[:-4] + '.csv')
+
+            ftp.download_data_from_ftp(connection, config.FTP_DIR_PATH, download_dir, file)
+            file_content = data_manager.read_file_lines(os.path.join(download_dir, file))
+            string_lines = re.split(r'\n', file_content)
+
+            final_lines = []
+
+            for line in string_lines:
+                if line.startswith('PT'):
+                    line_as_tuple = tuple(filter(None, re.split(r'\t+', line)))
+                    necessary_values_of_line = data_manager.append_indexes_from_tuple_to_tuple(
+                        config.INDEXES_OF_NEEDED_DATA, line_as_tuple)
+                    final_lines.append(necessary_values_of_line)
+
+            lines_with_correct_date_time_stamp = []
+            for line in final_lines:
+                separator_index = line[0].index('/')
+                date_time_stamp = line[0][separator_index + 1:-9]
+                clear_date_time = date_time_stamp.replace('T', ' ')
+                list_line = list(line)
+                list_line[0] = clear_date_time
+                lines_with_correct_date_time_stamp.append(tuple(list_line))
+
+            with open(csv_file_path, 'wb') as csv_f:
+                file_writer = csv.writer(csv_f, delimiter=';')
+                for x in lines_with_correct_date_time_stamp:
+                    file_writer.writerow(x)
+
+            ftp.disconnect_from_ftp(connection)
+            csv_files = data_manager.list_files_with_given_extension(download_dir, config.CONNECTED_FILES_EXTENSION)
+
+            csv_manager.connect_text_files_from_list_to_one(download_dir, csv_files, config.WEEK_FILE)
+            csv_manager.split_csv_line_data_and_clear_lines(config.WEEK_FILE, config.WEEK_SUMMARY, config.HEADERS, ';', ',')
+
 
 class FTP_client(object):
 
@@ -45,6 +111,7 @@ class FTP_client(object):
         except ftplib.all_errors as e:
             self.logger_instance.add_log_message("Uploading " + str(file_name) + "from FTP failed with: " + str(e), self.log_file_path)
             return False
+
 
 class Data_manager(object):
 
@@ -112,6 +179,7 @@ class Data_manager(object):
             new_tuple = new_tuple + (data_source_tuple[index],)
         return new_tuple
 
+    # TODO: Exceptions handling
     def list_files_with_given_extension(self, dir_to_list, file_extension):
         searched_files = []
 
@@ -131,8 +199,22 @@ class CSV_Manger(object):
         self.logger_instance = Logger()
         self.log_file_path = self.config_instance.LOG_FILE_PATH
 
-    def read_csv_file_lines(self):
-        pass
+    # TODO: Exceptions handling
+    def connect_text_files_from_list_to_one(self, files_parent_dir, files_list, connected_file_path):
+        os.chdir(files_parent_dir)
+        with open(connected_file_path, 'ab') as file:
+            for i in range(0, len(files_list)):
+                for line in open(files_list[i]):
+                    file.write(line)
+
+    # TODO: Exceptions handling
+    def split_csv_line_data_and_clear_lines(self, csv_file_to_edit, edited_file, csv_header_line_list, csv_delimiter, text_split_character):
+        with open(csv_file_to_edit, 'r+') as in_f:
+            with open(edited_file, 'ab') as out_f:
+                out_file_writer = csv.writer(out_f, delimiter=str(csv_delimiter))
+                out_file_writer.writerow(csv_header_line_list)
+                for line in in_f:
+                    out_f.write(str(csv_delimiter).join(line.split(str(text_split_character))).replace('[', '').replace(']', ''))
 
     def write_data_to_csv(self, csv_file_path, lines):
         with open(csv_file_path, 'wb') as resultFile:
@@ -164,66 +246,9 @@ class Logger(object):
         else:
             return False
 
-config = Configuration()
-ftp = FTP_client()
-data_manager = Data_manager()
-logger = Logger()
-csv_manager = CSV_Manger()
 
-logger.clear_log_file(config.LOG_FILE_PATH)
-connection = ftp.connect_to_ftp(config.FTP_HOST, config.FTP_LOGIN, config.FTP_PSWD)
-start_date_object = data_manager.convert_string_date_to_date_object(config.START_DATE)
-end_date_object = data_manager.convert_string_date_to_date_object(config.END_DATE)
-dates = data_manager.get_dates_set(start_date_object, end_date_object)
-file_names = data_manager.get_file_names_from_dates(dates, config.FTP_FILE_EXTENSION)
-data_manager.create_dir_with_date_stamp(config.RUN_DATE ,config.LOCAL_DIR)
-download_dir = os.path.join(config.LOCAL_DIR, config.RUN_DATE)
+if __name__ == '__main__':
+    start_date = raw_input('Start of download (date as YYYY-MM-DD): ')
+    end_date = raw_input('End of download (date as YYYY-MM-DD): ')
 
-
-for file in file_names:
-    csv_file_path = os.path.join(download_dir, file[:-4] + '.csv')
-
-    ftp.download_data_from_ftp(connection, config.FTP_DIR_PATH, download_dir, file)
-    file_content = data_manager.read_file_lines(os.path.join(download_dir, file))
-    string_lines = re.split(r'\n', file_content)
-
-    final_lines = []
-
-    for line in string_lines:
-        if line.startswith('PT'):
-            line_as_tuple = tuple(filter(None, re.split(r'\t+', line)))
-            necessary_values_of_line = data_manager.append_indexes_from_tuple_to_tuple(config.INDEXES_OF_NEEDED_DATA, line_as_tuple)
-            final_lines.append(necessary_values_of_line)
-
-    lines_with_correct_date_time_stamp = []
-    for line in final_lines:
-        separator_index = line[0].index('/')
-        date_time_stamp =  line[0][separator_index + 1:-9]
-        clear_date_time = date_time_stamp.replace('T', ' ')
-        list_line = list(line)
-        list_line[0] = clear_date_time
-        lines_with_correct_date_time_stamp.append(tuple(list_line))
-
-
-    item_length = len(lines_with_correct_date_time_stamp[0])
-
-    with open(csv_file_path, 'wb') as csv_f:
-        file_writer = csv.writer(csv_f, delimiter = ';')
-        for x in lines_with_correct_date_time_stamp:
-            file_writer.writerow(x)
-
-ftp.disconnect_from_ftp(connection)
-csv_files = data_manager.list_files_with_given_extension(download_dir, config.CONNECTED_FILES_EXTENSION)
-
-os.chdir(download_dir)
-with open(config.WEEK_FILE, 'ab') as file:
-    for i in range(0, len(csv_files)):
-        for line in open(csv_files[i]):
-            file.write(line)
-
-with open(config.WEEK_FILE, 'r+') as inf:
-    with open(config.WEEK_SUMMARY, 'ab') as outf:
-        out_file_writer = csv.writer(outf, delimiter = ';')
-        out_file_writer.writerow(config.HEADERS)
-        for line in inf:
-            outf.write(';'.join(line.split(',')).replace('[', '').replace(']', ''))
+    Init(start_date, end_date)
