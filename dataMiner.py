@@ -11,7 +11,7 @@ import re
 from config import Configuration
 
 
-class Initialize(object):
+class Initializer(object):
 
     def check_input(self, date_string):
         datetime.strptime(str(date_string), '%Y-%m-%d')
@@ -29,31 +29,39 @@ class Initialize(object):
         start_date_object = data_manager.convert_string_date_to_date_object(start_date)
         end_date_object = data_manager.convert_string_date_to_date_object(end_date)
         dates = data_manager.get_dates_set(start_date_object, end_date_object)
-        file_names = data_manager.get_file_names_from_dates(dates, config.FTP_FILE_EXTENSION)
+        weeks_list =  data_manager.cut_dates_set_to_weeks(dates)
+
         data_manager.create_dir_with_date_stamp(config.RUN_DATE, config.LOCAL_DIR)
         download_dir = os.path.join(config.LOCAL_DIR, config.RUN_DATE)
 
-        for file in file_names:
-            logger.add_log_message("Processing file: " + str(file), config.LOG_FILE_PATH, config.LOGGER_INFO)
-            csv_file_path = os.path.join(download_dir, file[:-4] + '.csv')
+        for week_dates_list in weeks_list:
+            file_names = data_manager.get_file_names_from_dates(week_dates_list, config.FTP_FILE_EXTENSION)
+            data_manager.create_dir_with_date_stamp(week_dates_list[0], download_dir)
+            week_download_dir = os.path.join(download_dir, week_dates_list[0])
 
-            logger.add_log_message("Downloading data from FTP", config.LOG_FILE_PATH, config.LOGGER_INFO)
-            ftp.download_data_from_ftp(connection, config.FTP_DIR_PATH, download_dir, file)
+            for file in file_names:
+                logger.add_log_message("Processing file: " + str(file), config.LOG_FILE_PATH, config.LOGGER_INFO)
+                csv_file_path = os.path.join(week_download_dir, file[:-4] + '.csv')
 
-            logger.add_log_message("Clearing data", config.LOG_FILE_PATH, config.LOGGER_INFO)
-            file_content = data_manager.read_file_lines(os.path.join(download_dir, file))
-            string_lines = re.split(r'\n', file_content)
-            pure_data_lines = csv_manager.get_pure_data_lines_from_csv(string_lines, config.DATA_LINES_POINTER)
-            lines_with_correct_date_time_stamp = data_manager.adjust_date_time_stamp_in_lines(pure_data_lines, '/', 'T', ' ')
+                logger.add_log_message("Downloading data from FTP", config.LOG_FILE_PATH, config.LOGGER_INFO)
+                ftp.download_data_from_ftp(connection, config.FTP_DIR_PATH, week_download_dir, file)
 
-            logger.add_log_message("Converting file: " + str(file) + " to CSV format", config.LOG_FILE_PATH, config.LOGGER_INFO)
-            csv_manager.write_data_to_csv(csv_file_path, lines_with_correct_date_time_stamp, config.CSV_DELIMITER)
+                logger.add_log_message("Clearing data", config.LOG_FILE_PATH, config.LOGGER_INFO)
+                file_content = data_manager.read_file_lines(os.path.join(week_download_dir, file))
+                string_lines = re.split(r'\n', file_content)
+                pure_data_lines = csv_manager.get_pure_data_lines_from_csv(string_lines, config.DATA_LINES_POINTER)
+                lines_with_correct_date_time_stamp = data_manager.adjust_date_time_stamp_in_lines(pure_data_lines, '/', 'T', ' ')
 
-        logger.add_log_message("Connecting week CSV files", config.LOG_FILE_PATH, config.LOGGER_INFO)
-        csv_files = data_manager.list_files_with_given_extension(download_dir, config.CONNECTED_FILES_EXTENSION)
-        csv_manager.connect_text_files_from_list_to_one(download_dir, csv_files, config.WEEK_FILE)
-        csv_manager.split_csv_line_data_and_clear_lines(config.WEEK_FILE, config.WEEK_SUMMARY, config.HEADERS, str(config.CSV_DELIMITER), ',')
-        logger.add_log_message("Files processing finalized", config.LOG_FILE_PATH, config.LOGGER_INFO)
+                logger.add_log_message("Converting file: " + str(file) + " to CSV format", config.LOG_FILE_PATH, config.LOGGER_INFO)
+                csv_manager.write_data_to_csv(csv_file_path, lines_with_correct_date_time_stamp, config.CSV_DELIMITER)
+
+            logger.add_log_message("Connecting week CSV files", config.LOG_FILE_PATH, config.LOGGER_INFO)
+            csv_files = data_manager.list_files_with_given_extension(week_download_dir, config.CONNECTED_FILES_EXTENSION)
+            this_week_csv_file_name = data_manager.create_file_name_from_dates(week_dates_list[0], week_dates_list[-1], '',config.CONNECTED_FILES_EXTENSION)
+            this_week_csv_summary_file_name = data_manager.create_file_name_from_dates(week_dates_list[0], week_dates_list[-1], '_week_sum',config.CONNECTED_FILES_EXTENSION)
+            csv_manager.connect_text_files_from_list_to_one(week_download_dir, csv_files, this_week_csv_file_name)
+            csv_manager.split_csv_line_data_and_clear_lines(this_week_csv_file_name, this_week_csv_summary_file_name, config.HEADERS, str(config.CSV_DELIMITER), ',')
+            logger.add_log_message("Files processing finalized", config.LOG_FILE_PATH, config.LOGGER_INFO)
 
         ftp.disconnect_from_ftp(connection)
         logger.add_log_message("Data processing end", config.LOG_FILE_PATH, config.LOGGER_END)
@@ -105,6 +113,9 @@ class Data_manager(object):
         self.logger_instance = Logger()
         self.log_file_path = self.config_instance.LOG_FILE_PATH
 
+    def create_file_name_from_dates(self,start_date, end_date, flag_text, file_extension):
+        return str(start_date) + '_' + str(end_date) + str(flag_text) + str(file_extension)
+
     def adjust_date_time_stamp_in_lines(self, lines_list, hash_delimiter, date_time_delimiter_to_replace, replace_char):
         corrected_lines = []
         for line in lines_list:
@@ -118,8 +129,11 @@ class Data_manager(object):
         return corrected_lines
 
     def cut_dates_set_to_weeks(self, dates_list):
-        week_dates_set = []
-        pass
+        if dates_list:
+            week_dates_set = [dates_list[x:x+8] for x in xrange(0, len(dates_list), 8)]
+            return week_dates_set
+        else:
+            self.logger_instance.add_log_message("Empty dates list given as attribute in Data_manager.cut_dates_set_to_weeks! Data preparation failed!", self.log_file_path, self.config_instance.LOGGER_ERROR)
 
     def convert_string_date_to_date_object(self, string_date):
         return datetime.strptime(string_date, '%Y-%m-%d').date()
@@ -279,16 +293,16 @@ if __name__ == '__main__':
 
     while True:
         start_date = raw_input('Start of download (date as YYYY-MM-DD): ')
-        end_date = raw_input('End of download (date as YYYY-MM-DD): ')
+        end_date = raw_input('End of download - in the past(date as YYYY-MM-DD): ')
         try:
-            Initialize().check_input(start_date)
-            Initialize().check_input(end_date)
+            Initializer().check_input(start_date)
+            Initializer().check_input(end_date)
         except ValueError:
             print 'Bad date time format for one of given dates, please check spelling and repeat input'
             continue
         else:
             print 'Running processing for dates from: ' + str(start_date) + ' to: ' + str(end_date) + '! Process description can be found at given logger file'
-            Initialize().process(start_date, end_date)
+            Initializer().process(start_date, end_date)
             print 'Process finalized'
             exit()
 
